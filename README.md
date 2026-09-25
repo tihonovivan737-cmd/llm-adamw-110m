@@ -73,19 +73,19 @@ python run_experiment.py --gpus 2 --config configs/adamw_ru_500m.json --data dat
 
 Для запуска одной картой укажите `--gpus 1`. При нехватке памяти уменьшите `micro_batch_size` в конфиге до 1; число шагов накопления градиента увеличится, а размер global batch останется тем же. Для продолжения аварийно прерванного процесса используйте `--resume` с теми же конфигурацией, данными и числом GPU.
 
-## Поэтапное обучение: 3 млрд, затем до 10 млрд
+## Поэтапное обучение: 1 млрд, затем до 10 млрд
 
-Подготовь корпус на 10 млрд токенов один раз. Конфиг подготовки и первого этапа хранит `train_tokens=10 млрд`, но останавливает обучение на 3 млрд:
+Подготовь корпус на 10 млрд токенов один раз. Конфиг подготовки и первого этапа хранит `train_tokens=10 млрд`, но останавливает обучение на 1 млрд:
 
 ```bash
-python prepare_data.py --config configs/adamw_ru_500m_3b_on_10b.json --output data/russian_mix_10b
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_3b_on_10b.json --data data/russian_mix_10b --output runs/adamw_ru_500m_seed42 --stop-after-steps 10
+python prepare_data.py --config configs/adamw_ru_500m_1b_on_10b.json --output data/russian_mix_10b
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_1b_on_10b.json --data data/russian_mix_10b --output runs/adamw_ru_500m_seed42 --stop-after-steps 10
 ```
 
-Продолжи первый этап до 3 млрд:
+Продолжи первый этап до 1 млрд:
 
 ```bash
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_3b_on_10b.json --data data/russian_mix_10b --output runs/adamw_ru_500m_seed42 --resume
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_1b_on_10b.json --data data/russian_mix_10b --output runs/adamw_ru_500m_seed42 --resume
 ```
 
 После оценки чекпойнта продолжи тот же запуск до 10 млрд всего:
