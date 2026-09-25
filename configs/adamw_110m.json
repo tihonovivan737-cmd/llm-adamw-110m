@@ -1,0 +1,42 @@
+{
+  "model": {
+    "vocab_size": 32000,
+    "dim": 768,
+    "layers": 12,
+    "heads": 12,
+    "ffn_dim": 2048,
+    "seq_len": 1024,
+    "rope_theta": 10000.0,
+    "norm_eps": 0.00001
+  },
+  "data": {
+    "dataset": "HuggingFaceFW/fineweb-edu",
+    "subset": "sample-10BT",
+    "revision": "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9",
+    "tokenizer": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+    "tokenizer_revision": "59f6f375b26bde864a6ca194a9a3044570490064",
+    "train_tokens": 300000000,
+    "val_tokens": 2000000,
+    "val_fraction": 0.02,
+    "shuffle_buffer": 10000,
+    "seed": 42
+  },
+  "training": {
+    "seed": 42,
+    "micro_batch_size": 2,
+    "global_batch_tokens": 131072,
+    "max_tokens": 300000000,
+    "learning_rate": 0.0006,
+    "min_lr_ratio": 0.1,
+    "warmup_fraction": 0.02,
+    "betas": [0.9, 0.95],
+    "eps": 0.00000001,
+    "weight_decay": 0.1,
+    "grad_clip": 1.0,
+    "precision": "bf16",
+    "eval_every": 100,
+    "eval_tokens": 262144,
+    "save_every": 200,
+    "log_every": 10
+  }
+}
