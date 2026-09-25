@@ -58,12 +58,17 @@ def prepare(args):
     temp = out.with_name(out.name + '.partial')
     if out.exists() or temp.exists():
         raise FileExistsError(f'{out} or {temp} exists. Use a new output directory; no files were overwritten.')
-    temp.mkdir(parents=True)
     tokenizer = AutoTokenizer.from_pretrained(cfg['tokenizer'], revision=cfg['tokenizer_revision'],
                                                use_fast=True, trust_remote_code=False)
-    if len(tokenizer) != config['model']['vocab_size'] or tokenizer.eos_token_id is None:
-        raise ValueError('Tokenizer vocabulary/EOS does not match the model')
+    if tokenizer.eos_token_id is None:
+        raise ValueError(f'Tokenizer {cfg["tokenizer"]} has no EOS token configured')
+    if len(tokenizer) != config['model']['vocab_size']:
+        raise ValueError(
+            f'Tokenizer vocabulary mismatch: len(tokenizer)={len(tokenizer)}, '
+            f'model.vocab_size={config["model"]["vocab_size"]}'
+        )
     dtype = '<u2' if len(tokenizer) <= 65536 else '<u4'
+    temp.mkdir(parents=True)
     tokenizer.save_pretrained(temp / 'tokenizer')
     print(f'Tokenizer: {cfg["tokenizer"]}, vocabulary={len(tokenizer)}, EOS={tokenizer.eos_token_id}', flush=True)
     dataset = mixed_rows(sources, cfg['seed'], cfg['shuffle_buffer'])

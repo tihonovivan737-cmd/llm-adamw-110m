@@ -1,6 +1,6 @@
 {
   "model": {
-    "vocab_size": 50272,
+    "vocab_size": 50257,
     "dim": 1024,
     "layers": 33,
     "heads": 16,
