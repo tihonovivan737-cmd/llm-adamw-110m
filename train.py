@@ -107,8 +107,11 @@ def check_continuation(checkpoint, previous_manifest, data_dir, manifest, config
     new_data = dict(config['data'])
     old_budget = old_data.pop('train_tokens')
     new_budget = new_data.pop('train_tokens')
-    if old_data != new_data or new_budget <= old_budget:
-        raise ValueError('Continuation requires the same data source and a larger train_tokens budget')
+    if old_data != new_data or new_budget < old_budget:
+        raise ValueError('Continuation requires the same data source and an equal-or-larger train_tokens budget')
+    if (new_budget == old_budget
+            and checkpoint['data_fingerprint'] != fingerprint(manifest)):
+        raise ValueError('Same-budget continuation requires the exact same prepared corpus')
 
     old_training = dict(old_config['training'])
     new_training = dict(config['training'])

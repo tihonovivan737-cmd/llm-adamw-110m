@@ -75,27 +75,26 @@ python run_experiment.py --gpus 2 --config configs/adamw_ru_500m.json --data dat
 
 ## Поэтапное обучение: 3 млрд, затем до 10 млрд
 
-Если сначала хочешь оценить качество после 3 млрд токенов, подготовь отдельный 3B-корпус и пройди первые 10 шагов для проверки GPU:
+Подготовь корпус на 10 млрд токенов один раз. Конфиг подготовки и первого этапа хранит `train_tokens=10 млрд`, но останавливает обучение на 3 млрд:
 
 ```bash
-python prepare_data.py --config configs/adamw_ru_500m_3b.json --output data/russian_mix_3b
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_3b.json --data data/russian_mix_3b --output runs/adamw_ru_500m_seed42 --stop-after-steps 10
+python prepare_data.py --config configs/adamw_ru_500m_3b_on_10b.json --output data/russian_mix_10b
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_3b_on_10b.json --data data/russian_mix_10b --output runs/adamw_ru_500m_seed42 --stop-after-steps 10
 ```
 
-Затем продолжи этот запуск до 3 млрд токенов:
+Продолжи первый этап до 3 млрд:
 
 ```bash
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_3b.json --data data/russian_mix_3b --output runs/adamw_ru_500m_seed42 --resume
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_3b_on_10b.json --data data/russian_mix_10b --output runs/adamw_ru_500m_seed42 --resume
 ```
 
-Чтобы продолжить дальше до 10 млрд токенов, подготовь расширенный корпус и возобнови тот же запуск:
+После оценки чекпойнта продолжи тот же запуск до 10 млрд всего:
 
 ```bash
-python prepare_data.py --config configs/adamw_ru_500m_10b_continue.json --output data/russian_mix_10b
 python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_10b_continue.json --data data/russian_mix_10b --output runs/adamw_ru_500m_seed42 --resume --continue-training
 ```
 
-Второй этап продолжает **до 10 млрд всего**, а не добавляет ещё 10 млрд. Он проверяет, что первые 3 млрд токенов совпадают с первым этапом, сохраняет состояние AdamW и продолжает с постоянным learning rate `0.00003` — конечным уровнем cosine schedule первого этапа. Каталог `runs/adamw_ru_500m_seed42` с `latest.pt` и `data_manifest.json` должен сохраниться. Для освобождения места каталог `data/russian_mix_3b` можно удалить после того, как 10B-корпус успешно подготовлен.
+Второй этап использует тот же корпус, манифест и валидацию, сохраняет состояние AdamW и продолжает с постоянным learning rate `0.00003` — конечным уровнем cosine schedule первого этапа. Он продолжает **до 10 млрд всего**, а не добавляет ещё 10 млрд. Каталог `runs/adamw_ru_500m_seed42` с `latest.pt` и `data_manifest.json` должен сохраниться.
 
 ## Результаты
 

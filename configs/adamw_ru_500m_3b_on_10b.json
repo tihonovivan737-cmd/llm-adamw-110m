@@ -12,7 +12,7 @@
   "data": {
     "tokenizer": "ai-forever/ruGPT-3.5-13B",
     "tokenizer_revision": "64b115374b8f086ef13ccb8ba4f49d8076a53324",
-    "train_tokens": 3000000000,
+    "train_tokens": 10000000000,
     "val_tokens": 20000000,
     "val_fraction": 0.002,
     "shuffle_buffer": 20000,
