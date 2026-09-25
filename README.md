@@ -73,6 +73,30 @@ python run_experiment.py --gpus 2 --config configs/adamw_ru_500m.json --data dat
 
 Для запуска одной картой укажите `--gpus 1`. При нехватке памяти уменьшите `micro_batch_size` в конфиге до 1; число шагов накопления градиента увеличится, а размер global batch останется тем же. Для продолжения аварийно прерванного процесса используйте `--resume` с теми же конфигурацией, данными и числом GPU.
 
+## Поэтапное обучение: 3 млрд, затем до 10 млрд
+
+Если сначала хочешь оценить качество после 3 млрд токенов, подготовь отдельный 3B-корпус и пройди первые 10 шагов для проверки GPU:
+
+```bash
+python prepare_data.py --config configs/adamw_ru_500m_3b.json --output data/russian_mix_3b
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_3b.json --data data/russian_mix_3b --output runs/adamw_ru_500m_seed42 --stop-after-steps 10
+```
+
+Затем продолжи этот запуск до 3 млрд токенов:
+
+```bash
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_3b.json --data data/russian_mix_3b --output runs/adamw_ru_500m_seed42 --resume
+```
+
+Чтобы продолжить дальше до 10 млрд токенов, подготовь расширенный корпус и возобнови тот же запуск:
+
+```bash
+python prepare_data.py --config configs/adamw_ru_500m_10b_continue.json --output data/russian_mix_10b
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_10b_continue.json --data data/russian_mix_10b --output runs/adamw_ru_500m_seed42 --resume --continue-training
+```
+
+Второй этап продолжает **до 10 млрд всего**, а не добавляет ещё 10 млрд. Он проверяет, что первые 3 млрд токенов совпадают с первым этапом, сохраняет состояние AdamW и продолжает с постоянным learning rate `0.00003` — конечным уровнем cosine schedule первого этапа. Каталог `runs/adamw_ru_500m_seed42` с `latest.pt` и `data_manifest.json` должен сохраниться. Для освобождения места каталог `data/russian_mix_3b` можно удалить после того, как 10B-корпус успешно подготовлен.
+
 ## Результаты
 
 Каталог запуска хранит `config.json`, `data_manifest.json`, копию токенизатора, `metrics.jsonl`, `latest.pt` и лучший чекпойнт `best.pt`. Лог включает train loss, validation loss, perplexity, learning rate, скорость и пиковую память. После обучения оцените лучший чекпойнт на всех 20 млн валидационных токенов:
