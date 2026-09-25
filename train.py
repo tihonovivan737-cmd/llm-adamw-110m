@@ -93,6 +93,61 @@ def check_hashes(directory, manifest):
             raise ValueError(f'{name}.bin SHA256 mismatch')
 
 
+def check_continuation(checkpoint, previous_manifest, data_dir, manifest, config):
+    """Allow a longer token budget only when the new corpus extends the old one exactly."""
+    if checkpoint['data_fingerprint'] != fingerprint(previous_manifest):
+        raise ValueError('Saved run manifest does not match the checkpoint')
+
+    old_config = checkpoint['config']
+    old_source = dict(previous_manifest['source'])
+    new_source = dict(manifest['source'])
+    if old_source != old_config['data'] or new_source != config['data']:
+        raise ValueError('Dataset manifests do not match their saved configurations')
+    old_data = dict(old_config['data'])
+    new_data = dict(config['data'])
+    old_budget = old_data.pop('train_tokens')
+    new_budget = new_data.pop('train_tokens')
+    if old_data != new_data or new_budget <= old_budget:
+        raise ValueError('Continuation requires the same data source and a larger train_tokens budget')
+
+    old_training = dict(old_config['training'])
+    new_training = dict(config['training'])
+    old_training.pop('max_tokens')
+    new_training.pop('max_tokens')
+    # A continuation uses a lower, constant learning rate for the second stage.
+    for training in (old_training, new_training):
+        training.pop('learning_rate')
+        training.pop('min_lr_ratio')
+    if old_config['model'] != config['model'] or old_training != new_training:
+        raise ValueError('Continuation cannot change the model or other training settings')
+    if (config['training']['learning_rate'] >= old_config['training']['learning_rate']
+            or config['training']['min_lr_ratio'] != 1.0):
+        raise ValueError('Continuation requires a lower constant learning rate')
+    if config['training']['max_tokens'] <= checkpoint['tokens_seen']:
+        raise ValueError('Continuation max_tokens must exceed tokens_seen in the checkpoint')
+    if config['training']['max_tokens'] > TokenFile(data_dir, 'train').target_tokens:
+        raise ValueError('Continuation max_tokens exceeds the extended train split')
+
+    old_val = previous_manifest['splits']['val']
+    new_val = manifest['splits']['val']
+    if old_val['target_tokens'] != new_val['target_tokens'] or old_val['sha256'] != new_val['sha256']:
+        raise ValueError('Continuation must keep the same validation tokens')
+
+    old_train = previous_manifest['splits']['train']
+    prefix_bytes = old_train['stored_tokens'] * np.dtype(previous_manifest['dtype']).itemsize
+    h = hashlib.sha256()
+    with (Path(data_dir) / 'train.bin').open('rb') as f:
+        remaining = prefix_bytes
+        while remaining:
+            block = f.read(min(8 * 1024 * 1024, remaining))
+            if not block:
+                raise ValueError('Extended train split is shorter than the original corpus')
+            h.update(block)
+            remaining -= len(block)
+    if h.hexdigest() != old_train['sha256']:
+        raise ValueError('Extended train split is not an exact prefix of the original corpus')
+
+
 def run(args):
     rank, world = int(os.environ.get('RANK', 0)), int(os.environ.get('WORLD_SIZE', 1))
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
@@ -143,7 +198,13 @@ def run(args):
     if args.resume:
         # Only load checkpoints you trust: optimizer/RNG states require pickle.
         checkpoint = torch.load(args.resume, map_location='cpu', weights_only=False)
-        if checkpoint['data_fingerprint'] != data_hash or checkpoint['config'] != config:
+        if args.continue_training:
+            previous_manifest_path = Path(args.output) / 'data_manifest.json'
+            if not previous_manifest_path.exists():
+                raise ValueError('--continue-training requires the previous run data_manifest.json')
+            previous_manifest = json.loads(previous_manifest_path.read_text(encoding='utf-8'))
+            check_continuation(checkpoint, previous_manifest, args.data, manifest, config)
+        elif checkpoint['data_fingerprint'] != data_hash or checkpoint['config'] != config:
             raise ValueError('Resume requires exactly the same dataset manifest and configuration')
         if not args.eval_only and checkpoint['world_size'] != world:
             raise ValueError('Resume training with the same world size; evaluation may use one GPU')
@@ -252,6 +313,8 @@ def parser():
     p.add_argument('--cpu-threads', type=int, default=4)
     p.add_argument('--seed', type=int)
     p.add_argument('--resume', type=Path)
+    p.add_argument('--continue-training', action='store_true',
+                   help='Continue into a larger, verified train split with a second-stage config')
     p.add_argument('--stop-after-steps', type=int, help='Absolute step at which to checkpoint and exit; schedule is unchanged')
     p.add_argument('--eval-only', action='store_true')
     p.add_argument('--full-validation', action='store_true', help='With --eval-only: use all prepared validation tokens')

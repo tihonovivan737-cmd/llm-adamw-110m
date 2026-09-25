@@ -14,11 +14,15 @@ def main():
     p.add_argument('--gpus', type=int, default=2)
     p.add_argument('--prepare', action='store_true')
     p.add_argument('--resume', action='store_true', help='Resume output/latest.pt')
+    p.add_argument('--continue-training', action='store_true',
+                   help='Continue from latest.pt using a larger, prefix-verified corpus')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--stop-after-steps', type=int)
     args = p.parse_args()
     if args.gpus < 1:
         p.error('--gpus must be positive')
+    if args.continue_training and not args.resume:
+        p.error('--continue-training requires --resume')
     if os.name == 'nt' and args.gpus > 1:
         p.error('NCCL DDP requires Linux/WSL2. Native Windows supports --gpus 1 here.')
     import torch
@@ -40,6 +44,8 @@ def main():
         if not checkpoint.exists():
             p.error(f'Checkpoint not found: {checkpoint}')
         command += ['--resume', str(checkpoint)]
+    if args.continue_training:
+        command += ['--continue-training']
     if args.stop_after_steps is not None:
         command += ['--stop-after-steps', str(args.stop_after_steps)]
     subprocess.run(command, check=True)
