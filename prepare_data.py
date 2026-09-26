@@ -155,7 +155,7 @@ def prepare(args):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--config', default='configs/adamw_ru_500m.json')
+    p.add_argument('--config', default='configs/adamw_ru_200m.json')
     p.add_argument('--output', default='data/russian_mix_10b')
     p.add_argument('--train-tokens', type=int)
     p.add_argument('--val-tokens', type=int)

@@ -308,9 +308,9 @@ def run(args):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--config', default='configs/adamw_ru_500m.json')
+    p.add_argument('--config', default='configs/adamw_ru_200m.json')
     p.add_argument('--data', default='data/russian_mix_10b')
-    p.add_argument('--output', default='runs/qwen35_ru_500m_seed42')
+    p.add_argument('--output', default='runs/qwen35_ru_200m_seed42')
     p.add_argument('--device', choices=['cuda', 'cpu'], default='cuda')
     p.add_argument('--cpu-threads', type=int, default=4)
     p.add_argument('--seed', type=int)

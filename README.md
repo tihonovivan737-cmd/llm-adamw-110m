@@ -1,6 +1,6 @@
-# Русскоязычная языковая модель на архитектуре Qwen3.5
+# Русскоязычная языковая модель Qwen3.5 около 200M
 
-Проект обучает с нуля текстовый decoder Qwen3.5 через официальную реализацию Hugging Face Transformers. Используется гибридный стек Qwen3.5: три слоя Gated DeltaNet с линейным вниманием на каждый четвёртый слой с полным causal attention, gated MLP, RoPE и общие входные/выходные embeddings. Это конфигурация около 500 млн параметров, созданная по мотивам текстовой конфигурации Qwen3.5-0.8B; готовые веса Qwen не загружаются.
+Проект обучает с нуля текстовый decoder Qwen3.5 через официальную реализацию Hugging Face Transformers. Используется гибридный стек Qwen3.5: три слоя Gated DeltaNet с линейным вниманием на каждый четвёртый слой с полным causal attention, gated MLP, RoPE и общие входные/выходные embeddings. Это уменьшенная конфигурация примерно на 200 млн параметров; готовые веса Qwen не загружаются.
 
 Русский токенизатор `ai-forever/ruGPT-3.5-13B`, словарь из 50 257 токенов и уже подготовленный корпус остаются прежними. Меняется только архитектура модели и каталог запуска. Подготовленные `train.bin`, `val.bin` и токенизатор повторно использовать можно.
 
@@ -8,10 +8,10 @@
 
 | Параметр | Значение |
 |---|---:|
-| Параметры модели | около 500 млн (точное число пишется в начале лога) |
-| Слои / скрытый размер | 20 / 1024 |
-| Типы слоёв | 15 Gated DeltaNet + 5 full attention |
-| Attention / FFN | GQA 8/2; gated MLP, 3584 |
+| Параметры модели | около 200 млн (точное число пишется в начале лога) |
+| Слои / скрытый размер | 16 / 768 |
+| Типы слоёв | 12 Gated DeltaNet + 4 full attention |
+| Attention / FFN | GQA 6/2; gated MLP, 2688 |
 | Словарь / контекст обучения | 50 257 / 1024 токена |
 | Обучающие токены | 10 млрд, около 20 токенов на параметр |
 | Валидация | 20 млн токенов из отложенных документов |
@@ -66,19 +66,19 @@ python -m pip install causal-conv1d flash-linear-attention
 Проверьте конфигурацию и подготовьте смешанный токенизированный корпус. Файлы токенов займут около 20 ГБ; во время подготовки дополнительно нужны место для кеша Hugging Face и временной SQLite-базы удаления дубликатов.
 
 ```bash
-python prepare_data.py --config configs/adamw_ru_500m.json --output data/russian_mix_10b
+python prepare_data.py --config configs/adamw_ru_200m.json --output data/russian_mix_10b
 ```
 
 Короткий запуск на двух GPU. Для новой архитектуры используй новый каталог чекпойнтов; старые чекпойнты от предыдущего Transformer несовместимы:
 
 ```bash
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_seed42 --stop-after-steps 10
+python run_experiment.py --gpus 2 --config configs/adamw_ru_200m.json --data data/russian_mix_10b --output runs/qwen35_ru_200m_seed42 --stop-after-steps 10
 ```
 
 Если в логах нет ошибки по памяти, продолжите до конца бюджета:
 
 ```bash
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_seed42 --resume
+python run_experiment.py --gpus 2 --config configs/adamw_ru_200m.json --data data/russian_mix_10b --output runs/qwen35_ru_200m_seed42 --resume
 ```
 
 Для запуска одной картой укажите `--gpus 1`. При нехватке памяти уменьшите `micro_batch_size` в конфиге до 1; число шагов накопления градиента увеличится, а размер global batch останется тем же. Для продолжения аварийно прерванного процесса используйте `--resume` с теми же конфигурацией, данными и числом GPU.
@@ -88,36 +88,36 @@ python run_experiment.py --gpus 2 --config configs/adamw_ru_500m.json --data dat
 Конфиг рассчитан на корпус в 10 млрд токенов, но первый этап останавливается на 1 млрд. Если `data/russian_mix_10b/manifest.json` уже есть, корпус и токенизатор готовы — команду `prepare_data.py` пропусти:
 
 ```bash
-python prepare_data.py --config configs/adamw_ru_500m_1b_on_10b.json --output data/russian_mix_10b
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_seed42 --stop-after-steps 10
+python prepare_data.py --config configs/adamw_ru_200m_1b_on_10b.json --output data/russian_mix_10b
+python run_experiment.py --gpus 2 --config configs/adamw_ru_200m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_200m_seed42 --stop-after-steps 10
 ```
 
 Продолжи первый этап до 1 млрд:
 
 ```bash
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_seed42 --resume
+python run_experiment.py --gpus 2 --config configs/adamw_ru_200m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_200m_seed42 --resume
 ```
 
 После оценки чекпойнта продолжи тот же запуск до 10 млрд всего:
 
 ```bash
-python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_10b_continue.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_seed42 --resume --continue-training
+python run_experiment.py --gpus 2 --config configs/adamw_ru_200m_10b_continue.json --data data/russian_mix_10b --output runs/qwen35_ru_200m_seed42 --resume --continue-training
 ```
 
-Второй этап использует тот же корпус, манифест и валидацию, сохраняет состояние AdamW и продолжает с постоянным learning rate `0.00003` — конечным уровнем cosine schedule первого этапа. Он продолжает **до 10 млрд всего**, а не добавляет ещё 10 млрд. Каталог `runs/qwen35_ru_500m_seed42` с `latest.pt` и `data_manifest.json` должен сохраниться.
+Второй этап использует тот же корпус, манифест и валидацию, сохраняет состояние AdamW и продолжает с постоянным learning rate `0.00003` — конечным уровнем cosine schedule первого этапа. Он продолжает **до 10 млрд всего**, а не добавляет ещё 10 млрд. Каталог `runs/qwen35_ru_200m_seed42` с `latest.pt` и `data_manifest.json` должен сохраниться.
 
 ## Результаты
 
 Каталог запуска хранит `config.json`, `data_manifest.json`, копию токенизатора, `metrics.jsonl`, `latest.pt` и лучший чекпойнт `best.pt`. Лог включает train loss, validation loss, perplexity, learning rate, скорость и пиковую память. После обучения оцените лучший чекпойнт на всех 20 млн валидационных токенов:
 
 ```bash
-python train.py --config configs/adamw_ru_500m.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_seed42 --resume runs/qwen35_ru_500m_seed42/best.pt --eval-only --full-validation
+python train.py --config configs/adamw_ru_200m.json --data data/russian_mix_10b --output runs/qwen35_ru_200m_seed42 --resume runs/qwen35_ru_200m_seed42/best.pt --eval-only --full-validation
 ```
 
 Сгенерировать продолжение текста:
 
 ```bash
-python generate.py --checkpoint runs/qwen35_ru_500m_seed42/best.pt --prompt "В глубине старого леса" --max-new-tokens 100
+python generate.py --checkpoint runs/qwen35_ru_200m_seed42/best.pt --prompt "В глубине старого леса" --max-new-tokens 100
 ```
 
 Это базовая языковая модель продолжения текста, не диалоговая модель и не инструкция-следующая модель. Perplexity сравнивайте только при одинаковом токенизаторе и одинаковой отложенной выборке.
