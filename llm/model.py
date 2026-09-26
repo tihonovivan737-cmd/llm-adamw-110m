@@ -1,126 +1,113 @@
-import math
+"""Qwen3.5 text-backbone model wrapper used by the project's training loop."""
 from dataclasses import dataclass
 
 import torch
 from torch import nn
 from torch.nn import functional as F
+from transformers import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
 
 @dataclass
 class ModelConfig:
-    vocab_size: int = 32000
-    dim: int = 768
-    layers: int = 12
-    heads: int = 12
-    ffn_dim: int = 2048
+    """Small Qwen3.5-style decoder configuration.
+
+    The model keeps Qwen3.5's 3:1 Gated DeltaNet/full-attention layout and
+    gated MLP, while the vocabulary remains the project's Russian tokenizer.
+    """
+
+    vocab_size: int = 50257
+    hidden_size: int = 1024
+    intermediate_size: int = 3584
+    num_hidden_layers: int = 20
+    num_attention_heads: int = 8
+    num_key_value_heads: int = 2
+    head_dim: int = 256
     seq_len: int = 1024
-    rope_theta: float = 10000.0
-    norm_eps: float = 1e-5
+    max_position_embeddings: int = 262144
+    rms_norm_eps: float = 1e-6
+    initializer_range: float = 0.02
+    linear_conv_kernel_dim: int = 4
+    linear_key_head_dim: int = 128
+    linear_value_head_dim: int = 128
+    linear_num_key_heads: int = 16
+    linear_num_value_heads: int = 16
+    full_attention_interval: int = 4
+    rope_theta: float = 10000000.0
 
     def __post_init__(self):
-        if min(self.vocab_size, self.dim, self.layers, self.heads, self.ffn_dim, self.seq_len) <= 0:
+        if min(self.vocab_size, self.hidden_size, self.intermediate_size,
+               self.num_hidden_layers, self.num_attention_heads,
+               self.num_key_value_heads, self.head_dim, self.seq_len,
+               self.max_position_embeddings, self.full_attention_interval) <= 0:
             raise ValueError('Model dimensions must be positive')
-        if self.dim % self.heads or (self.dim // self.heads) % 2:
-            raise ValueError('Head dimension must be integral and even')
+        if self.num_hidden_layers % self.full_attention_interval:
+            raise ValueError('num_hidden_layers must be divisible by full_attention_interval')
+        if self.num_attention_heads % self.num_key_value_heads:
+            raise ValueError('num_attention_heads must be divisible by num_key_value_heads')
 
     @property
-    def parameter_count(self):
-        return self.vocab_size * self.dim + self.layers * (
-            4 * self.dim**2 + 3 * self.dim * self.ffn_dim + 2 * self.dim
-        ) + self.dim
+    def layer_types(self):
+        return [
+            'full_attention' if (index + 1) % self.full_attention_interval == 0
+            else 'linear_attention'
+            for index in range(self.num_hidden_layers)
+        ]
 
-
-class RMSNorm(nn.Module):
-    def __init__(self, dim, eps):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.eps = eps
-
-    def forward(self, x):
-        z = x.float()
-        z = z * torch.rsqrt(z.square().mean(-1, keepdim=True) + self.eps)
-        return (z * self.weight.float()).to(x.dtype)
-
-
-class Attention(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-        self.heads = cfg.heads
-        self.head_dim = cfg.dim // cfg.heads
-        self.qkv = nn.Linear(cfg.dim, 3 * cfg.dim, bias=False)
-        self.out = nn.Linear(cfg.dim, cfg.dim, bias=False)
-        inv = 1.0 / (cfg.rope_theta ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
-        angles = torch.outer(torch.arange(cfg.seq_len).float(), inv)
-        self.register_buffer('cos', angles.cos()[None, None], persistent=False)
-        self.register_buffer('sin', angles.sin()[None, None], persistent=False)
-
-    def rotary(self, x):
-        a, b = x.chunk(2, dim=-1)
-        c = self.cos[:, :, :x.shape[-2]].to(x.dtype)
-        s = self.sin[:, :, :x.shape[-2]].to(x.dtype)
-        return torch.cat((a * c - b * s, b * c + a * s), dim=-1)
-
-    def forward(self, x):
-        batch, length, width = x.shape
-        q, k, v = self.qkv(x).chunk(3, dim=-1)
-        q, k, v = [z.view(batch, length, self.heads, self.head_dim).transpose(1, 2) for z in (q, k, v)]
-        y = F.scaled_dot_product_attention(self.rotary(q), self.rotary(k), v,
-                                          dropout_p=0.0, is_causal=True)
-        return self.out(y.transpose(1, 2).contiguous().view(batch, length, width))
-
-
-class Block(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-        self.attn_norm = RMSNorm(cfg.dim, cfg.norm_eps)
-        self.attn = Attention(cfg)
-        self.ffn_norm = RMSNorm(cfg.dim, cfg.norm_eps)
-        self.gate = nn.Linear(cfg.dim, cfg.ffn_dim, bias=False)
-        self.up = nn.Linear(cfg.dim, cfg.ffn_dim, bias=False)
-        self.down = nn.Linear(cfg.ffn_dim, cfg.dim, bias=False)
-
-    def forward(self, x):
-        x = x + self.attn(self.attn_norm(x))
-        h = self.ffn_norm(x)
-        return x + self.down(F.silu(self.gate(h)) * self.up(h))
+    def to_transformers_config(self):
+        return Qwen3_5TextConfig(
+            vocab_size=self.vocab_size,
+            hidden_size=self.hidden_size,
+            intermediate_size=self.intermediate_size,
+            num_hidden_layers=self.num_hidden_layers,
+            num_attention_heads=self.num_attention_heads,
+            num_key_value_heads=self.num_key_value_heads,
+            head_dim=self.head_dim,
+            max_position_embeddings=self.max_position_embeddings,
+            rms_norm_eps=self.rms_norm_eps,
+            initializer_range=self.initializer_range,
+            use_cache=False,
+            tie_word_embeddings=True,
+            linear_conv_kernel_dim=self.linear_conv_kernel_dim,
+            linear_key_head_dim=self.linear_key_head_dim,
+            linear_value_head_dim=self.linear_value_head_dim,
+            linear_num_key_heads=self.linear_num_key_heads,
+            linear_num_value_heads=self.linear_num_value_heads,
+            layer_types=self.layer_types,
+            rope_parameters={
+                'rope_type': 'default',
+                'rope_theta': self.rope_theta,
+                'partial_rotary_factor': 0.25,
+                'mrope_interleaved': True,
+                'mrope_section': [11, 11, 10],
+            },
+        )
 
 
 class LanguageModel(nn.Module):
+    """Qwen3.5 text-only causal LM initialized from scratch."""
+
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.embedding = nn.Embedding(cfg.vocab_size, cfg.dim)
-        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.layers)])
-        self.norm = RMSNorm(cfg.dim, cfg.norm_eps)
-        self.apply(self._init)
-        for block in self.blocks:
-            nn.init.normal_(block.attn.out.weight, std=0.02 / math.sqrt(2 * cfg.layers))
-            nn.init.normal_(block.down.weight, std=0.02 / math.sqrt(2 * cfg.layers))
-
-    @staticmethod
-    def _init(module):
-        if isinstance(module, (nn.Embedding, nn.Linear)):
-            nn.init.normal_(module.weight, std=0.02)
+        self.model = Qwen3_5ForCausalLM(cfg.to_transformers_config())
+        self.parameter_count = sum(parameter.numel() for parameter in self.parameters())
 
     def forward(self, tokens, targets=None):
         if tokens.shape[1] > self.cfg.seq_len:
             raise ValueError('Sequence exceeds configured context')
-        x = self.embedding(tokens)
-        for block in self.blocks:
-            x = block(x)
-        # Tied output weights: the embedding is registered only once.
-        logits = F.linear(self.norm(x), self.embedding.weight)
+        output = self.model(input_ids=tokens, use_cache=False, return_dict=True)
         if targets is None:
-            return logits
-        return F.cross_entropy(logits.float().reshape(-1, self.cfg.vocab_size),
+            return output.logits
+        return F.cross_entropy(output.logits.float().reshape(-1, self.cfg.vocab_size),
                                targets.reshape(-1), ignore_index=-100, reduction='sum')
 
 
 def make_optimizer(model, cfg, device):
-    # Embedding/LM head and norm weights are excluded from weight decay.
+    # Keep embeddings/output head and norm vectors out of weight decay.
     decay, no_decay = [], []
     for name, param in model.named_parameters():
-        (no_decay if param.ndim < 2 or name == 'embedding.weight' else decay).append(param)
+        is_embedding_or_head = 'embed_tokens' in name or 'lm_head' in name
+        (no_decay if param.ndim < 2 or is_embedding_or_head else decay).append(param)
     return torch.optim.AdamW([
         {'params': decay, 'weight_decay': cfg['weight_decay']},
         {'params': no_decay, 'weight_decay': 0.0},

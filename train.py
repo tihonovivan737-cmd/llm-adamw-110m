@@ -194,7 +194,6 @@ def run(args):
     check_hashes(args.data, manifest)
     data_hash = fingerprint(manifest)
     model = LanguageModel(mc).to(device)
-    assert sum(p.numel() for p in model.parameters()) == mc.parameter_count
     optimizer = make_optimizer(model, tc, device)
     tokens, step, best = 0, 0, float('inf')
     checkpoint = None
@@ -241,7 +240,7 @@ def run(args):
                 with (out / 'metrics.jsonl').open('a', encoding='utf-8') as f:
                     f.write(json.dumps(record) + '\n')
 
-    log({'event': 'start', 'parameters': mc.parameter_count, 'world_size': world,
+    log({'event': 'start', 'parameters': model.parameter_count, 'world_size': world,
          'device': str(device), 'precision': tc['precision'] if device.type == 'cuda' else 'fp32',
          'tokens_seen': tokens, 'target_tokens': tc['max_tokens'],
          'gradient_accumulation_steps': tc['global_batch_tokens'] // (world * micro_cap)})
@@ -311,7 +310,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config', default='configs/adamw_ru_500m.json')
     p.add_argument('--data', default='data/russian_mix_10b')
-    p.add_argument('--output', default='runs/adamw_ru_500m_seed42')
+    p.add_argument('--output', default='runs/qwen35_ru_500m_seed42')
     p.add_argument('--device', choices=['cuda', 'cpu'], default='cuda')
     p.add_argument('--cpu-threads', type=int, default=4)
     p.add_argument('--seed', type=int)
