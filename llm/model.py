@@ -16,12 +16,12 @@ class ModelConfig:
     """
 
     vocab_size: int = 50257
-    hidden_size: int = 768
-    intermediate_size: int = 2688
-    num_hidden_layers: int = 16
-    num_attention_heads: int = 6
+    hidden_size: int = 1024
+    intermediate_size: int = 3584
+    num_hidden_layers: int = 36
+    num_attention_heads: int = 8
     num_key_value_heads: int = 2
-    head_dim: int = 128
+    head_dim: int = 256
     seq_len: int = 1024
     max_position_embeddings: int = 262144
     rms_norm_eps: float = 1e-6
@@ -29,8 +29,8 @@ class ModelConfig:
     linear_conv_kernel_dim: int = 4
     linear_key_head_dim: int = 128
     linear_value_head_dim: int = 128
-    linear_num_key_heads: int = 12
-    linear_num_value_heads: int = 12
+    linear_num_key_heads: int = 16
+    linear_num_value_heads: int = 16
     full_attention_interval: int = 4
     rope_theta: float = 10000000.0
 
@@ -52,6 +52,15 @@ class ModelConfig:
             else 'linear_attention'
             for index in range(self.num_hidden_layers)
         ]
+
+    @property
+    def mrope_section(self):
+        # Qwen3.5 uses [11, 11, 10] with head_dim=256. Scale the same
+        # temporal/height/width split for smaller head dimensions.
+        rotary_frequencies = int(self.head_dim * 0.25) // 2
+        temporal = rotary_frequencies * 11 // 32
+        height = rotary_frequencies * 11 // 32
+        return [temporal, height, rotary_frequencies - temporal - height]
 
     def to_transformers_config(self):
         return Qwen3_5TextConfig(
@@ -78,7 +87,7 @@ class ModelConfig:
                 'rope_theta': self.rope_theta,
                 'partial_rotary_factor': 0.25,
                 'mrope_interleaved': True,
-                'mrope_section': [5, 5, 6],
+                'mrope_section': self.mrope_section,
             },
         )
 
