@@ -23,6 +23,35 @@ def autocast(device, precision):
     return torch.autocast('cuda', dtype=torch.bfloat16) if device.type == 'cuda' and precision == 'bf16' else nullcontext()
 
 
+def cuda_memory_stats(device, local_rank, world):
+    """Collect per-GPU process and device memory stats for rank-zero logs."""
+    if device.type != 'cuda':
+        return []
+
+    free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+    total_gb = total_bytes / 1e9
+    local = torch.tensor([
+        torch.cuda.memory_allocated(device) / 1e9,
+        torch.cuda.memory_reserved(device) / 1e9,
+        torch.cuda.max_memory_allocated(device) / 1e9,
+        (total_bytes - free_bytes) / 1e9,
+        total_gb,
+    ], dtype=torch.float64, device=device)
+    gathered = [torch.empty_like(local) for _ in range(world)]
+    if world > 1:
+        dist.all_gather(gathered, local)
+    else:
+        gathered[0].copy_(local)
+
+    names = ('process_allocated_gb', 'process_reserved_gb',
+             'process_peak_allocated_gb', 'device_used_gb', 'device_total_gb')
+    return [
+        {'gpu': index if world > 1 else local_rank,
+         **{name: round(value, 3) for name, value in zip(names, stats.tolist())}}
+        for index, stats in enumerate(gathered)
+    ]
+
+
 @torch.no_grad()
 def evaluate(model, data, token_limit, batch_size, device, precision, rank=0, world=1):
     was_training = model.training
@@ -289,11 +318,13 @@ def run(args):
         elapsed = time.perf_counter() - started
         final = tokens == tc['max_tokens'] or (args.stop_after_steps is not None and step >= args.stop_after_steps)
         if step == 1 or step % tc['log_every'] == 0 or final:
+            gpu_memory = cuda_memory_stats(device, local_rank, world)
             log({'event': 'train', 'step': step, 'tokens_seen': tokens, 'step_tokens': step_tokens,
                  'train_loss': total_loss.item() / step_tokens, 'lr': lr,
                  'grad_norm_before_clip': float(grad_norm), 'step_seconds': elapsed,
                  'tokens_per_second': step_tokens / elapsed,
-                 'peak_vram_gb': torch.cuda.max_memory_allocated(device) / 1e9 if device.type == 'cuda' else 0})
+                 'peak_vram_gb': torch.cuda.max_memory_allocated(device) / 1e9 if device.type == 'cuda' else 0,
+                 'gpu_memory': gpu_memory})
         improved = False
         if step % tc['eval_every'] == 0 or final:
             result = evaluate(model, val_data, tc['eval_tokens'], tc['micro_batch_size'], device, tc['precision'], rank, world)
