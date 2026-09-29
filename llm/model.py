@@ -112,13 +112,30 @@ class LanguageModel(nn.Module):
 
 
 def make_optimizer(model, cfg, device):
-    # Keep embeddings/output head and norm vectors out of weight decay.
-    decay, no_decay = [], []
+    optimizer_name = cfg.get('optimizer', 'adamw').lower()
+    if optimizer_name not in ('adamw', 'muon'):
+        raise ValueError(f'Unsupported optimizer: {optimizer_name}')
+
+    # Keep embeddings/output head and norm vectors on the auxiliary AdamW path.
+    decay, no_decay, muon_params = [], [], []
     for name, param in model.named_parameters():
         is_embedding_or_head = 'embed_tokens' in name or 'lm_head' in name
-        (no_decay if param.ndim < 2 or is_embedding_or_head else decay).append(param)
-    return torch.optim.AdamW([
+        if optimizer_name == 'muon' and param.ndim == 2 and not is_embedding_or_head:
+            muon_params.append(param)
+        else:
+            (no_decay if param.ndim < 2 or is_embedding_or_head else decay).append(param)
+
+    adamw_groups = [
         {'params': decay, 'weight_decay': cfg['weight_decay']},
         {'params': no_decay, 'weight_decay': 0.0},
-    ], lr=cfg['learning_rate'], betas=tuple(cfg['betas']), eps=cfg['eps'],
-        fused=device.type == 'cuda')
+    ]
+    adamw_groups = [group for group in adamw_groups if group['params']]
+    if optimizer_name == 'adamw':
+        return torch.optim.AdamW(adamw_groups, lr=cfg['learning_rate'],
+                                 betas=tuple(cfg['betas']), eps=cfg['eps'],
+                                 fused=device.type == 'cuda')
+    if not muon_params:
+        raise ValueError('Muon selected but no hidden 2D parameters were found')
+
+    from .muon import MuonAdamW
+    return MuonAdamW(muon_params, adamw_groups, cfg, device)

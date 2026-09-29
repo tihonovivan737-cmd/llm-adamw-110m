@@ -62,7 +62,7 @@ def cuda_memory_stats(device, local_rank, world, model, optimizer, step_peak_byt
         gathered[0].copy_(local)
 
     names = ('process_allocated_gb', 'process_reserved_gb', 'step_peak_allocated_gb',
-             'model_parameters_gb', 'gradients_gb', 'adamw_states_gb', 'model_buffers_gb',
+             'model_parameters_gb', 'gradients_gb', 'optimizer_states_gb', 'model_buffers_gb',
              'other_current_allocated_gb', 'other_at_step_peak_approx_gb',
              'device_used_gb', 'device_total_gb')
     return [
@@ -220,6 +220,14 @@ def run(args):
     log_every = args.log_every if args.log_every is not None else tc['log_every']
     if log_every <= 0:
         raise ValueError('--log-every must be positive')
+    optimizer_name = tc.get('optimizer', 'adamw').lower()
+    if optimizer_name not in ('adamw', 'muon'):
+        raise ValueError(f'Unsupported optimizer: {optimizer_name}')
+    if optimizer_name == 'muon' and (tc['muon_learning_rate'] <= 0
+                                      or tc['muon_weight_decay'] < 0
+                                      or tc['muon_momentum'] < 0
+                                      or tc['muon_ns_steps'] <= 0):
+        raise ValueError('Invalid Muon hyperparameters')
     mc = ModelConfig(**config['model'])
     if tc['precision'] not in ('fp32', 'bf16'):
         raise ValueError('Supported precision: fp32 or bf16')
@@ -293,6 +301,7 @@ def run(args):
                     f.write(json.dumps(record) + '\n')
 
     log({'event': 'start', 'parameters': model.parameter_count, 'world_size': world,
+         'optimizer': optimizer_name,
          'device': str(device), 'precision': tc['precision'] if device.type == 'cuda' else 'fp32',
          'tokens_seen': tokens, 'target_tokens': tc['max_tokens'],
          'gradient_accumulation_steps': tc['global_batch_tokens'] // (world * micro_cap)})
@@ -314,8 +323,12 @@ def run(args):
         step_tokens = min(tc['global_batch_tokens'], tc['max_tokens'] - tokens)
         micro_steps = math.ceil(step_tokens / (world * micro_cap))
         lr = learning_rate(tokens + step_tokens, tc)
+        schedule_scale = lr / tc['learning_rate']
         for group in optimizer.param_groups:
-            group['lr'] = lr
+            if group.get('optimizer_kind') == 'muon':
+                group['lr'] = tc['muon_learning_rate'] * schedule_scale
+            else:
+                group['lr'] = lr
         optimizer.zero_grad(set_to_none=True)
         total_loss = torch.zeros((), device=device, dtype=torch.float64)
         for micro in range(micro_steps):
@@ -348,12 +361,16 @@ def run(args):
         final = tokens == tc['max_tokens'] or (args.stop_after_steps is not None and step >= args.stop_after_steps)
         if step == 1 or step % log_every == 0 or final:
             gpu_memory = cuda_memory_stats(device, local_rank, world, model, optimizer, step_peak_bytes)
-            log({'event': 'train', 'step': step, 'tokens_seen': tokens, 'step_tokens': step_tokens,
-                 'train_loss': total_loss.item() / step_tokens, 'lr': lr,
-                 'grad_norm_before_clip': float(grad_norm), 'step_seconds': elapsed,
-                 'tokens_per_second': step_tokens / elapsed,
-                 'peak_vram_gb': peak_allocated_bytes / 1e9,
-                 'gpu_memory': gpu_memory})
+            record = {'event': 'train', 'optimizer': optimizer_name,
+                      'step': step, 'tokens_seen': tokens, 'step_tokens': step_tokens,
+                      'train_loss': total_loss.item() / step_tokens, 'lr': lr,
+                      'grad_norm_before_clip': float(grad_norm), 'step_seconds': elapsed,
+                      'tokens_per_second': step_tokens / elapsed,
+                      'peak_vram_gb': peak_allocated_bytes / 1e9,
+                      'gpu_memory': gpu_memory}
+            if optimizer_name == 'muon':
+                record['muon_lr'] = tc['muon_learning_rate'] * schedule_scale
+            log(record)
         improved = False
         if step % tc['eval_every'] == 0 or final:
             result = evaluate(model, val_data, tc['eval_tokens'], tc['micro_batch_size'], device, tc['precision'], rank, world)
