@@ -1,109 +1,147 @@
-"""Render metrics.jsonl as Markdown training and per-GPU memory tables."""
+"""Export training metrics.jsonl to a formatted Excel workbook."""
 import argparse
 import json
 from pathlib import Path
-import time
+
+from openpyxl import Workbook
+from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
 TRAIN_COLUMNS = (
-    ('step', 'Step'),
-    ('tokens_seen', 'Tokens seen'),
-    ('step_tokens', 'Step tokens'),
+    ('step', 'Шаг'),
+    ('tokens_seen', 'Токенов обработано'),
+    ('step_tokens', 'Токенов за шаг'),
     ('train_loss', 'Train loss'),
-    ('lr', 'LR'),
-    ('grad_norm_before_clip', 'Grad norm'),
-    ('step_seconds', 'Seconds'),
-    ('tokens_per_second', 'Tokens/s'),
-    ('peak_vram_gb', 'Peak VRAM (GB)'),
+    ('lr', 'Learning rate'),
+    ('grad_norm_before_clip', 'Норма градиента'),
+    ('step_seconds', 'Время шага, с'),
+    ('tokens_per_second', 'Токенов/с'),
+    ('peak_vram_gb', 'Пик VRAM, ГБ'),
 )
 MEMORY_COLUMNS = (
-    ('step', 'Step'),
+    ('step', 'Шаг'),
     ('gpu', 'GPU'),
-    ('device_used_gb', 'Device used / total (GB)'),
-    ('process_allocated_gb', 'Allocated / reserved (GB)'),
-    ('model_parameters_gb', 'Weights (GB)'),
-    ('gradients_gb', 'Gradients (GB)'),
-    ('adamw_states_gb', 'AdamW states (GB)'),
-    ('other_current_allocated_gb', 'Other current (GB)'),
-    ('other_at_step_peak_approx_gb', 'Other at peak, approx (GB)'),
+    ('device_used_gb', 'Используется на GPU, ГБ'),
+    ('device_total_gb', 'Всего на GPU, ГБ'),
+    ('process_allocated_gb', 'Выделено процессом, ГБ'),
+    ('process_reserved_gb', 'Зарезервировано процессом, ГБ'),
+    ('step_peak_allocated_gb', 'Пик выделения за шаг, ГБ'),
+    ('model_parameters_gb', 'Веса модели, ГБ'),
+    ('gradients_gb', 'Градиенты, ГБ'),
+    ('adamw_states_gb', 'Состояния AdamW, ГБ'),
+    ('model_buffers_gb', 'Буферы модели, ГБ'),
+    ('other_current_allocated_gb', 'Прочая текущая память, ГБ'),
+    ('other_at_step_peak_approx_gb', 'Прочая память на пике, оценка, ГБ'),
 )
 
 
-def cell(value, digits=3):
-    if value is None:
-        return '—'
-    if isinstance(value, (int, float)):
-        if isinstance(value, int) or (isinstance(value, float) and value.is_integer()):
-            return f'{int(value):,}'
-        return f'{value:.{digits}f}'
-    return str(value).replace('|', '\\|').replace('\n', ' ')
+def style_sheet(sheet, title, columns, table_name):
+    sheet.title = title
+    for index, (_, label) in enumerate(columns, start=1):
+        sheet.cell(row=1, column=index, value=label)
+    sheet.freeze_panes = 'A2'
+    sheet.sheet_view.showGridLines = False
+    for cell in sheet[1]:
+        cell.fill = PatternFill('solid', fgColor='17365D')
+        cell.font = Font(color='FFFFFF', bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    sheet.row_dimensions[1].height = 34
+
+    widths = {
+        'Шаг': 10, 'Токенов обработано': 22, 'Токенов за шаг': 18,
+        'Train loss': 14, 'Learning rate': 16, 'Норма градиента': 19,
+        'Время шага, с': 16, 'Токенов/с': 16, 'Пик VRAM, ГБ': 16,
+        'GPU': 9, 'Используется на GPU, ГБ': 23, 'Всего на GPU, ГБ': 18,
+        'Выделено процессом, ГБ': 24, 'Зарезервировано процессом, ГБ': 29,
+        'Пик выделения за шаг, ГБ': 25, 'Веса модели, ГБ': 18,
+        'Градиенты, ГБ': 17, 'Состояния AdamW, ГБ': 21, 'Буферы модели, ГБ': 20,
+        'Прочая текущая память, ГБ': 26,
+        'Прочая память на пике, оценка, ГБ': 34,
+    }
+    for index, (_, label) in enumerate(columns, start=1):
+        sheet.column_dimensions[sheet.cell(1, index).column_letter].width = widths.get(label, 18)
+
+    if sheet.max_row > 1:
+        table = Table(displayName=table_name, ref=f'A1:{sheet.cell(sheet.max_row, sheet.max_column).coordinate}')
+        table.tableStyleInfo = TableStyleInfo(name='TableStyleMedium2', showFirstColumn=False,
+                                               showLastColumn=False, showRowStripes=True,
+                                               showColumnStripes=False)
+        sheet.add_table(table)
+        sheet.auto_filter.ref = table.ref
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.outlinePr.summaryBelow = True
 
 
-def write_header(file, title, columns):
-    file.write(f'# {title}\n\n')
-    file.write('| ' + ' | '.join(label for _, label in columns) + ' |\n')
-    file.write('| ' + ' | '.join('---' for _ in columns) + ' |\n')
-    file.flush()
-
-
-def append_record(record, train_file, memory_file):
-    if record.get('event') != 'train':
-        return False
-    train_file.write('| ' + ' | '.join(cell(record.get(key)) for key, _ in TRAIN_COLUMNS) + ' |\n')
-    for gpu in record.get('gpu_memory', []):
-        values = dict(record)
-        values.update(gpu)
-        device_usage = f"{cell(gpu.get('device_used_gb'))} / {cell(gpu.get('device_total_gb'))}"
-        process_usage = f"{cell(gpu.get('process_allocated_gb'))} / {cell(gpu.get('process_reserved_gb'))}"
-        values['device_used_gb'] = device_usage
-        values['process_allocated_gb'] = process_usage
-        memory_file.write('| ' + ' | '.join(cell(values.get(key)) for key, _ in MEMORY_COLUMNS) + ' |\n')
-    train_file.flush()
-    memory_file.flush()
-    return True
+def load_records(log_path):
+    with log_path.open('r', encoding='utf-8') as source:
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f'Invalid JSON on line {line_number}: {error}') from error
+            if record.get('event') == 'train':
+                yield record
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('logfile', type=Path, help='Run metrics.jsonl')
-    parser.add_argument('--output-dir', type=Path,
-                        help='Output directory (defaults to the run directory)')
-    parser.add_argument('--follow', action='store_true',
-                        help='Keep watching the log and append new training steps')
+    parser.add_argument('--output', type=Path,
+                        help='Output .xlsx path (defaults to training_metrics.xlsx beside the log)')
     args = parser.parse_args()
-    log_path = args.logfile
-    if not log_path.is_file():
-        parser.error(f'log file not found: {log_path}')
-    output_dir = args.output_dir or log_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-    train_path = output_dir / 'training_steps.md'
-    memory_path = output_dir / 'gpu_memory.md'
+    if not args.logfile.is_file():
+        parser.error(f'log file not found: {args.logfile}')
 
-    with train_path.open('w', encoding='utf-8') as train_file, \
-            memory_path.open('w', encoding='utf-8') as memory_file:
-        write_header(train_file, 'Training steps', TRAIN_COLUMNS)
-        write_header(memory_file, 'GPU memory by training step', MEMORY_COLUMNS)
-        with log_path.open('r', encoding='utf-8') as log_file:
-            for line in log_file:
-                try:
-                    append_record(json.loads(line), train_file, memory_file)
-                except json.JSONDecodeError:
-                    continue
-            print(f'Таблицы обновлены: {train_path} и {memory_path}', flush=True)
-            if args.follow:
-                while True:
-                    position = log_file.tell()
-                    line = log_file.readline()
-                    if not line or not line.endswith('\n'):
-                        log_file.seek(position)
-                        time.sleep(0.5)
-                        continue
-                    try:
-                        record = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if append_record(record, train_file, memory_file):
-                        print(f"Таблицы обновлены до шага {record.get('step')}", flush=True)
+    output = args.output or args.logfile.with_name('training_metrics.xlsx')
+    if output.suffix.lower() != '.xlsx':
+        parser.error('output filename must end with .xlsx')
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    workbook = Workbook()
+    training = workbook.active
+    style_sheet(training, 'Обучение', TRAIN_COLUMNS, 'TrainingSteps')
+    memory = workbook.create_sheet('Память GPU')
+    style_sheet(memory, 'Память GPU', MEMORY_COLUMNS, 'GpuMemory')
+
+    train_number_formats = {
+        'Train loss': '0.0000', 'Learning rate': '0.00000000',
+        'Норма градиента': '0.000', 'Время шага, с': '0.00',
+        'Токенов/с': '#,##0', 'Пик VRAM, ГБ': '0.000',
+        'Токенов обработано': '#,##0', 'Токенов за шаг': '#,##0',
+    }
+    memory_number_formats = {label: '0.000' for _, label in MEMORY_COLUMNS if label != 'GPU'}
+    for record in load_records(args.logfile):
+        training.append([record.get(key) for key, _ in TRAIN_COLUMNS])
+        for gpu_stats in record.get('gpu_memory', []):
+            memory.append([record.get('step') if key == 'step' else gpu_stats.get(key)
+                           for key, _ in MEMORY_COLUMNS])
+
+    style_sheet(training, 'Обучение', TRAIN_COLUMNS, 'TrainingSteps')
+    style_sheet(memory, 'Память GPU', MEMORY_COLUMNS, 'GpuMemory')
+    for sheet, formats in ((training, train_number_formats), (memory, memory_number_formats)):
+        for column_index, cell in enumerate(sheet[1], start=1):
+            number_format = formats.get(cell.value)
+            if number_format:
+                for row in sheet.iter_rows(min_row=2, min_col=column_index, max_col=column_index):
+                    row[0].number_format = number_format
+    if training.max_row > 1:
+        loss_col = next(index for index, (_, label) in enumerate(TRAIN_COLUMNS, start=1)
+                        if label == 'Train loss')
+        training.conditional_formatting.add(
+            f'{training.cell(2, loss_col).coordinate}:{training.cell(training.max_row, loss_col).coordinate}',
+            ColorScaleRule(start_type='min', start_color='C6EFD6',
+                           mid_type='percentile', mid_value=50, mid_color='FFF2CC',
+                           end_type='max', end_color='F4CCCC'))
+    workbook.properties.title = 'Результаты обучения модели'
+    workbook.properties.subject = 'Метрики шагов и память GPU'
+    workbook.save(output)
+    print(f'Excel-файл сохранён: {output} ({training.max_row - 1} шагов)')
 
 
 if __name__ == '__main__':

@@ -2,4 +2,5 @@ numpy==2.2.6
 transformers>=5.17.0,<6
 datasets==3.6.0
 sentencepiece==0.2.0
+openpyxl>=3.1,<4
 # Install torch==2.7.1 separately for your CUDA version; see README.md.

@@ -108,11 +108,13 @@ python run_experiment.py --gpus 2 --config configs/adamw_ru_800m_10b_continue.js
 
 ## Результаты
 
-Каталог запуска хранит `config.json`, `data_manifest.json`, копию токенизатора, `metrics.jsonl`, `latest.pt` и лучший чекпойнт `best.pt`. Лог включает train loss, validation loss, perplexity, learning rate, скорость и разбивку памяти по каждой GPU: параметры, градиенты, состояния AdamW, прочие текущие выделения и примерный объём временной памяти на пике шага. Чтобы логировать **каждый шаг оптимизатора**, добавь `--log-every 1` к команде обучения. Во время обучения скрипт ниже будет обновлять две Markdown-таблицы: метрики шагов и расход памяти GPU:
+Каталог запуска хранит `config.json`, `data_manifest.json`, копию токенизатора, `metrics.jsonl`, `latest.pt` и лучший чекпойнт `best.pt`. Лог включает train loss, validation loss, perplexity, learning rate, скорость и разбивку памяти по каждой GPU: параметры, градиенты, состояния AdamW, прочие текущие выделения и примерный объём временной памяти на пике шага. Чтобы логировать **каждый шаг оптимизатора**, добавь `--log-every 1` к команде обучения. После завершения обучения скрипт создаст Excel-книгу с листами метрик шагов и памяти GPU:
 
 ```bash
-python training_table.py runs/qwen35_ru_800m_seed42/metrics.jsonl --follow
+python training_table.py runs/qwen35_ru_800m_seed42/metrics.jsonl
 ```
+
+Книга `training_metrics.xlsx` появится рядом с `metrics.jsonl`.
 
 После обучения оцени лучший чекпойнт на всех 20 млн валидационных токенов:
 
