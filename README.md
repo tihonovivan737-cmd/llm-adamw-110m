@@ -119,26 +119,26 @@ python training_table.py runs/qwen35_ru_800m_seed42/metrics.jsonl
 
 ## Сравнение AdamW и Muon
 
-Оба эксперимента используют один конфиг модели, токенизатор, корпус, seed `42`, порядок токенов, global batch, precision, расписание и бюджет `1 млрд` токенов. Меняется только оптимизатор и присущие ему параметры. В режиме Muon он обновляет скрытые матрицы, а embeddings, выходная голова и остальные вектора обновляются AdamW. У каждого оптимизатора отдельный каталог чекпойнтов и логов.
+Оба эксперимента используют конфигурацию примерно на 500 млн параметров (24 слоя, hidden size 1024, intermediate size 3072), тот же токенизатор и корпус, seed `42`, порядок токенов, global batch, precision, расписание и бюджет `1 млрд` токенов. Логи записываются раз в 10 шагов. Меняется только оптимизатор и присущие ему параметры. В режиме Muon он обновляет скрытые матрицы, а embeddings, выходная голова и остальные вектора обновляются AdamW. У каждого оптимизатора отдельный каталог чекпойнтов и логов.
 
 Сначала запустите по 10 шагов на двух GPU для проверки окружения и памяти:
 
 ```bash
-python run_experiment.py --gpus 2 --config configs/adamw_ru_800m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_800m_adamw_1b_seed42 --seed 42 --stop-after-steps 10 --log-every 1
-python run_experiment.py --gpus 2 --config configs/muon_ru_800m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_800m_muon_1b_seed42 --seed 42 --stop-after-steps 10 --log-every 1
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_adamw_1b_seed42 --seed 42 --stop-after-steps 10 --log-every 10
+python run_experiment.py --gpus 2 --config configs/muon_ru_500m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_muon_1b_seed42 --seed 42 --stop-after-steps 10 --log-every 10
 ```
 
 Если проверка прошла, возобновите каждый каталог без `--stop-after-steps 10`, чтобы оба прогона дошли до 1 млрд токенов:
 
 ```bash
-python run_experiment.py --gpus 2 --config configs/adamw_ru_800m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_800m_adamw_1b_seed42 --seed 42 --resume --log-every 10
-python run_experiment.py --gpus 2 --config configs/muon_ru_800m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_800m_muon_1b_seed42 --seed 42 --resume --log-every 10
+python run_experiment.py --gpus 2 --config configs/adamw_ru_500m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_adamw_1b_seed42 --seed 42 --resume --log-every 10
+python run_experiment.py --gpus 2 --config configs/muon_ru_500m_1b_on_10b.json --data data/russian_mix_10b --output runs/qwen35_ru_500m_muon_1b_seed42 --seed 42 --resume --log-every 10
 ```
 
 После двух прогонов соберите общий Excel с метриками и сравнением loss на одинаковом числе токенов:
 
 ```bash
-python training_table.py runs/qwen35_ru_800m_adamw_1b_seed42/metrics.jsonl --compare runs/qwen35_ru_800m_muon_1b_seed42/metrics.jsonl --output runs/optimizer_comparison_800m_1b.xlsx
+python training_table.py runs/qwen35_ru_500m_adamw_1b_seed42/metrics.jsonl --compare runs/qwen35_ru_500m_muon_1b_seed42/metrics.jsonl --output runs/optimizer_comparison_500m_1b.xlsx
 ```
 
 После обучения оцени лучший чекпойнт на всех 20 млн валидационных токенов:
