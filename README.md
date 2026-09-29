@@ -108,7 +108,7 @@ python run_experiment.py --gpus 2 --config configs/adamw_ru_800m_10b_continue.js
 
 ## Результаты
 
-Каталог запуска хранит `config.json`, `data_manifest.json`, копию токенизатора, `metrics.jsonl`, `latest.pt` и лучший чекпойнт `best.pt`. Лог включает train loss, validation loss, perplexity, learning rate, скорость, а также текущую и пиковую память каждой GPU. После обучения оцените лучший чекпойнт на всех 20 млн валидационных токенов:
+Каталог запуска хранит `config.json`, `data_manifest.json`, копию токенизатора, `metrics.jsonl`, `latest.pt` и лучший чекпойнт `best.pt`. Лог включает train loss, validation loss, perplexity, learning rate, скорость и разбивку памяти по каждой GPU: параметры, градиенты, состояния AdamW, прочие текущие выделения и примерный объём временной памяти на пике шага. После обучения оцените лучший чекпойнт на всех 20 млн валидационных токенов:
 
 ```bash
 python train.py --config configs/adamw_ru_800m.json --data data/russian_mix_10b --output runs/qwen35_ru_800m_seed42 --resume runs/qwen35_ru_800m_seed42/best.pt --eval-only --full-validation

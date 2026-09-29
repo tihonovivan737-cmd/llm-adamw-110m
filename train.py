@@ -23,19 +23,37 @@ def autocast(device, precision):
     return torch.autocast('cuda', dtype=torch.bfloat16) if device.type == 'cuda' and precision == 'bf16' else nullcontext()
 
 
-def cuda_memory_stats(device, local_rank, world):
-    """Collect per-GPU process and device memory stats for rank-zero logs."""
+def cuda_memory_stats(device, local_rank, world, model, optimizer, step_peak_bytes):
+    """Collect per-GPU memory totals and a tensor-storage breakdown."""
     if device.type != 'cuda':
         return []
 
     free_bytes, total_bytes = torch.cuda.mem_get_info(device)
-    total_gb = total_bytes / 1e9
+    parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
+    gradient_bytes = sum(p.grad.numel() * p.grad.element_size()
+                         for p in model.parameters() if p.grad is not None)
+    optimizer_state_bytes = sum(
+        value.numel() * value.element_size()
+        for state in optimizer.state.values()
+        for value in state.values()
+        if torch.is_tensor(value) and value.device == device
+    )
+    buffer_bytes = sum(buffer.numel() * buffer.element_size() for buffer in model.buffers())
+    allocated_bytes = torch.cuda.memory_allocated(device)
+    reserved_bytes = torch.cuda.memory_reserved(device)
+    persistent_bytes = parameter_bytes + gradient_bytes + optimizer_state_bytes + buffer_bytes
     local = torch.tensor([
-        torch.cuda.memory_allocated(device) / 1e9,
-        torch.cuda.memory_reserved(device) / 1e9,
-        torch.cuda.max_memory_allocated(device) / 1e9,
-        (total_bytes - free_bytes) / 1e9,
-        total_gb,
+        allocated_bytes,
+        reserved_bytes,
+        step_peak_bytes,
+        parameter_bytes,
+        gradient_bytes,
+        optimizer_state_bytes,
+        buffer_bytes,
+        max(allocated_bytes - persistent_bytes, 0),
+        max(step_peak_bytes - persistent_bytes, 0),
+        total_bytes - free_bytes,
+        total_bytes,
     ], dtype=torch.float64, device=device)
     gathered = [torch.empty_like(local) for _ in range(world)]
     if world > 1:
@@ -43,11 +61,13 @@ def cuda_memory_stats(device, local_rank, world):
     else:
         gathered[0].copy_(local)
 
-    names = ('process_allocated_gb', 'process_reserved_gb',
-             'process_peak_allocated_gb', 'device_used_gb', 'device_total_gb')
+    names = ('process_allocated_gb', 'process_reserved_gb', 'step_peak_allocated_gb',
+             'model_parameters_gb', 'gradients_gb', 'adamw_states_gb', 'model_buffers_gb',
+             'other_current_allocated_gb', 'other_at_step_peak_approx_gb',
+             'device_used_gb', 'device_total_gb')
     return [
         {'gpu': index if world > 1 else local_rank,
-         **{name: round(value, 3) for name, value in zip(names, stats.tolist())}}
+         **{name: round(value / 1e9, 3) for name, value in zip(names, stats.tolist())}}
         for index, stats in enumerate(gathered)
     ]
 
@@ -282,9 +302,11 @@ def run(args):
         log({'event': 'validation', 'step': 0, 'tokens_seen': 0, **initial})
         # best.pt always corresponds to a saved, trained checkpoint.
     model.train()
+    peak_allocated_bytes = 0
     while tokens < tc['max_tokens'] and (args.stop_after_steps is None or step < args.stop_after_steps):
         if device.type == 'cuda':
             torch.cuda.synchronize(device)
+            torch.cuda.reset_peak_memory_stats(device)
         started = time.perf_counter()
         step_tokens = min(tc['global_batch_tokens'], tc['max_tokens'] - tokens)
         micro_steps = math.ceil(step_tokens / (world * micro_cap))
@@ -315,15 +337,19 @@ def run(args):
         step += 1
         if device.type == 'cuda':
             torch.cuda.synchronize(device)
+            step_peak_bytes = torch.cuda.max_memory_allocated(device)
+            peak_allocated_bytes = max(peak_allocated_bytes, step_peak_bytes)
+        else:
+            step_peak_bytes = 0
         elapsed = time.perf_counter() - started
         final = tokens == tc['max_tokens'] or (args.stop_after_steps is not None and step >= args.stop_after_steps)
         if step == 1 or step % tc['log_every'] == 0 or final:
-            gpu_memory = cuda_memory_stats(device, local_rank, world)
+            gpu_memory = cuda_memory_stats(device, local_rank, world, model, optimizer, step_peak_bytes)
             log({'event': 'train', 'step': step, 'tokens_seen': tokens, 'step_tokens': step_tokens,
                  'train_loss': total_loss.item() / step_tokens, 'lr': lr,
                  'grad_norm_before_clip': float(grad_norm), 'step_seconds': elapsed,
                  'tokens_per_second': step_tokens / elapsed,
-                 'peak_vram_gb': torch.cuda.max_memory_allocated(device) / 1e9 if device.type == 'cuda' else 0,
+                 'peak_vram_gb': peak_allocated_bytes / 1e9,
                  'gpu_memory': gpu_memory})
         improved = False
         if step % tc['eval_every'] == 0 or final:
