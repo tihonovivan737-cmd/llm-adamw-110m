@@ -217,6 +217,9 @@ def run(args):
     if args.seed is not None:
         config['training']['seed'] = args.seed
     tc = config['training']
+    log_every = args.log_every if args.log_every is not None else tc['log_every']
+    if log_every <= 0:
+        raise ValueError('--log-every must be positive')
     mc = ModelConfig(**config['model'])
     if tc['precision'] not in ('fp32', 'bf16'):
         raise ValueError('Supported precision: fp32 or bf16')
@@ -343,7 +346,7 @@ def run(args):
             step_peak_bytes = 0
         elapsed = time.perf_counter() - started
         final = tokens == tc['max_tokens'] or (args.stop_after_steps is not None and step >= args.stop_after_steps)
-        if step == 1 or step % tc['log_every'] == 0 or final:
+        if step == 1 or step % log_every == 0 or final:
             gpu_memory = cuda_memory_stats(device, local_rank, world, model, optimizer, step_peak_bytes)
             log({'event': 'train', 'step': step, 'tokens_seen': tokens, 'step_tokens': step_tokens,
                  'train_loss': total_loss.item() / step_tokens, 'lr': lr,
@@ -375,6 +378,8 @@ def parser():
     p.add_argument('--continue-training', action='store_true',
                    help='Continue into a larger, verified train split with a second-stage config')
     p.add_argument('--stop-after-steps', type=int, help='Absolute step at which to checkpoint and exit; schedule is unchanged')
+    p.add_argument('--log-every', type=int,
+                   help='Write training metrics every N optimizer steps without changing the saved config')
     p.add_argument('--eval-only', action='store_true')
     p.add_argument('--full-validation', action='store_true', help='With --eval-only: use all prepared validation tokens')
     return p

@@ -18,6 +18,8 @@ def main():
                    help='Continue from latest.pt using a larger, prefix-verified corpus')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--stop-after-steps', type=int)
+    p.add_argument('--log-every', type=int,
+                   help='Write training metrics every N optimizer steps without changing the saved config')
     args = p.parse_args()
     if args.gpus < 1:
         p.error('--gpus must be positive')
@@ -48,6 +50,8 @@ def main():
         command += ['--continue-training']
     if args.stop_after_steps is not None:
         command += ['--stop-after-steps', str(args.stop_after_steps)]
+    if args.log_every is not None:
+        command += ['--log-every', str(args.log_every)]
     subprocess.run(command, check=True)
 
 
